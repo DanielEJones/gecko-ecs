@@ -30,6 +30,7 @@ pub fn ComponentStore(comptime T: type) type {
 
         /// Removes a given index by swapping it with the last index
         pub fn remove(self: *ComponentStore(T), index: usize) void {
+            if (index >= self.size) return;
             _ = self.data.swapRemove(index);
             self.size -= 1;
         }
@@ -55,6 +56,11 @@ pub const ErasedComponentStore = struct {
         self.vtable.deinit(self.ptr, allocator);
     }
 
+    /// Remove an element from the underlying storage
+    pub fn remove(self: *ErasedComponentStore, index: usize) void {
+        self.vtable.remove(self.ptr, index);
+    }
+
     /// Cast the underlying store to the given type
     pub fn as(self: *ErasedComponentStore, comptime T: type) *ComponentStore(T) {
         // both the following compiler intrinsics cast based on the
@@ -66,6 +72,7 @@ pub const ErasedComponentStore = struct {
 
 const ComponentMethods = struct {
     deinit: *const fn (*anyopaque, Allocator) void,
+    remove: *const fn (*anyopaque, usize) void,
 
     /// Returns a method vtable for a given component type
     pub fn make(comptime T: type) ComponentMethods {
@@ -78,9 +85,14 @@ const ComponentMethods = struct {
                 store.deinit(alloc);
                 alloc.destroy(store);
             }
+
+            fn remove(ptr: *anyopaque, index: usize) void {
+                var store: *ComponentStore(T) = @ptrCast(@alignCast(ptr));
+                store.remove(index);
+            }
         };
 
-        return .{ .deinit = fns.deinit };
+        return .{ .deinit = fns.deinit, .remove = fns.remove };
     }
 };
 
@@ -118,15 +130,17 @@ test "can get components" {
 
     try store.add(alloc, Position{ .x = 10, .y = 10 });
 
-    // getting an existing index should return the component
-    const should_exist = store.get(0);
-    try expect(should_exist != null);
-    try expect(should_exist.?.x == 10);
-    try expect(should_exist.?.y == 10);
+    { // getting an existing index should return the component
+        const position = store.get(0);
+        try expect(position != null);
+        try expect(position.?.x == 10);
+        try expect(position.?.y == 10);
+    }
 
-    // getting an index to large should return null
-    const should_be_null = store.get(10);
-    try expect(should_be_null == null);
+    { // getting an index to large should return null
+        const position = store.get(10);
+        try expect(position == null);
+    }
 }
 
 test "can remove components" {
@@ -151,6 +165,7 @@ test "can remove components" {
 // +-- Erased Component Store --------------------------------------------------------------------
 
 test "casting works correctly" {
+    // make an allocator to run the test with
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const alloc = gpa.allocator();
     defer _ = gpa.deinit();
@@ -158,9 +173,35 @@ test "casting works correctly" {
     var erased = try ErasedComponentStore.init(Position, alloc);
     defer erased.deinit(alloc);
 
-    var first_access = erased.as(Position);
-    try first_access.add(alloc, Position{ .x = 10, .y = 10 });
+    { // create a new entry in this scope
+        var position = erased.as(Position);
+        try position.add(alloc, Position{ .x = 10, .y = 10 });
+    }
 
-    const second_access = erased.as(Position);
-    try expect(second_access.size == 1);
+    { // confirm we can access it in this scope
+        const position = erased.as(Position);
+        try expect(position.size == 1);
+        try expect(position.get(0).?.x == 10);
+    }
+}
+
+test "remove works correctly" {
+    // make an allocator to run the test with
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    const alloc = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    var erased = try ErasedComponentStore.init(Position, alloc);
+    defer erased.deinit(alloc);
+
+    { // create a new entry
+        var position = erased.as(Position);
+        try position.add(alloc, Position{ .x = 10, .y = 10 });
+    }
+
+    { // validate that removing works correctly
+        erased.remove(0);
+        const position = erased.as(Position);
+        try expect(position.size == 0);
+    }
 }
