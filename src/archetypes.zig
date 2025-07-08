@@ -15,17 +15,20 @@ pub const Archetype = struct {
     pub fn init(allocator: Allocator, fields: anytype) !Archetype {
         var map: Map(Erased) = .{};
         errdefer map.deinit(allocator);
+
         var size: usize = 0;
 
         // try to add an empty storage for each field
         inline for (fields) |field| {
-            if (@typeInfo(field) != .@"struct") {
-                @compileError("The following cannot be an archetype field: " ++ @typeName(field));
+            const T = if (@typeInfo(@TypeOf(field)) == .type) field else @TypeOf(field);
+
+            if (@typeInfo(T) != .@"struct") {
+                @compileError("The following cannot be an archetype field: " ++ @typeName(T));
             }
 
             size += 1;
-            const erased = try Erased.init(field, allocator);
-            try map.put(allocator, @typeName(field), erased);
+            const erased = try Erased.init(T, allocator);
+            try map.put(allocator, @typeName(T), erased);
         }
 
         return .{ .components = map, .field_count = size, .size = 0 };
